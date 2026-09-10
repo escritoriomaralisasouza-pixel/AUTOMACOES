@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "legalmail": {
+      "command": "python3",
+      "args": ["legalmail/legalmail_mcp.py"]
+    }
+  }
+}

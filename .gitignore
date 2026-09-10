@@ -1,0 +1,4 @@
+# Chave da API da Legal Mail — NUNCA versionar
+legalmail/.api_key
+.api_key
+*.api_key
