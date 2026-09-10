@@ -2,3 +2,8 @@
 legalmail/.api_key
 .api_key
 *.api_key
+
+# Relatorios gerados: contem nome de cliente e numero de processo
+# (sigilo profissional). Ficam no Drive do escritorio, nunca no git.
+legalmail/preview-*.html
+legalmail/relatorio-*.html
