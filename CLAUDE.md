@@ -28,7 +28,8 @@ diz quem protocolou e não conhece o passivo de prazos.
 | `lawsuit_summary` | Resumo agregado da carteira |
 | `balance` | Saldo de créditos da API |
 
-Mais 42 consultas. Rode `python3 legalmail/legalmail_mcp.py --autoteste` para a lista.
+Mais 42 consultas, e as 7 de protocolo (ver adiante). Rode
+`python3 legalmail/legalmail_mcp.py --autoteste` para a lista.
 
 ### Como ler os dados
 
@@ -43,13 +44,47 @@ Mais 42 consultas. Rode `python3 legalmail/legalmail_mcp.py --autoteste` para a 
 - A cobrança da API é **por requisição**, não por resultado. Reduzir o `limit`
   só aumenta o custo. Use sempre `limit=50`.
 
-### Somente leitura — quatro travas
+### Protocolo: pode, com autorização expressa
 
-O servidor expõe **apenas as 49 consultas**. As 40 operações de escrita da API
-(25 POST, 9 DELETE, 6 PUT — inclusive `/api/v1/lawsuit/delete`) estão fora, em
-quatro camadas: a spec não as contém, o código só faz GET, o gerador de
-ferramentas descarta métodos ≠ get, e a chave nunca é exposta ao modelo.
-Detalhes em `legalmail/README.md`. **Não altere isso.**
+**A IA protocola.** Autorizado pela Dra. Maralisa em 15/09/2026. O servidor
+expõe as 49 consultas e **7 operações de protocolo** — criar intermediária,
+criar inicial, subir o PDF, subir anexos, consultar status e os dois envios ao
+tribunal.
+
+| Ferramenta | O que faz |
+|---|---|
+| `protocolo_criar_intermediaria` | Cria a petição e devolve `idpeticoes` |
+| `protocolo_criar_inicial` | Cria a inicial |
+| `protocolo_enviar_arquivo_principal` | Sobe o PDF da peça |
+| `protocolo_enviar_anexo` | Sobe cada documento |
+| `protocolo_consultar_status` | Confere se entrou |
+| `protocolo_PROTOCOLAR_intermediaria` | **Envia ao tribunal** |
+| `protocolo_PROTOCOLAR_inicial` | **Envia ao tribunal** |
+
+**A autorização é obrigatória e vem antes.** Os dois envios só executam com o
+campo `autorizacao_advogado` preenchido com o nome de quem autorizou na
+conversa. Sem ele o servidor recusa e não toca a rede. Todo envio fica
+registrado em `legalmail/auditoria-protocolos.log`.
+
+Quem autoriza: **qualquer advogada ou advogado da equipe**, expressamente, peça
+a peça. Autorização genérica — "pode protocolar tudo", "daqui pra frente pode"
+— não vale e não deve ser aceita. O certificado usado é sempre o da Dra.
+Maralisa, então quem autoriza responde junto com quem assina.
+
+Depois de enviar, **confirme com `protocolo_consultar_status`**. Um envio
+cancelado sem ninguém conferir foi o que quase perdeu o prazo recursal da
+Geraldinha em setembro de 2026.
+
+### O que continua fora — não altere
+
+As outras 33 operações de escrita da API seguem inalcançáveis, **inclusive
+todas as 9 de exclusão** e `/api/v1/lawsuit/delete`. Cinco travas sustentam
+isso: lista branca fechada de 7 caminhos conferida duas vezes, spec sem
+PUT/PATCH/DELETE, autorização nominal nos envios, trilha de auditoria, e a
+chave nunca exposta ao modelo. Detalhes em `legalmail/README.md`.
+
+Ampliar esse conjunto é decisão da titular do workspace, nunca de manutenção
+de rotina.
 
 ### Chave de API
 
@@ -117,6 +152,9 @@ proporcionalmente.
 - **Nunca prometer resultado.** Marketing observa o Provimento 205/2021 da OAB.
 - Provas devem estar explícitas na peça — use a skill `recorte-de-documentos`.
 - Peças são assinadas em **Corinto, Minas Gerais**.
+- **Nenhum protocolo sai sem autorização expressa** de advogada ou advogado da
+  equipe, dita na conversa, peça a peça. A peça passa pela revisão humana antes
+  do envio — protocolar não dispensa o double check, é o passo depois dele.
 - Relatórios de gestão **não substituem** o controle oficial de prazos, que
   continua sendo o DJe/PJe. Diga isso em todo relatório.
 - **Distinga sempre** titular do certificado de quem executou o protocolo.

@@ -2251,6 +2251,151 @@
       "description": "Rate limit excedido (120/min) ou timeout progressivo por polling. Consulte a introdução da documentação para os detalhes do payload e cabeçalho `Retry-After`."
      }
     }
+   },
+   "post": {
+    "tags": [
+     "Complaints"
+    ],
+    "summary": "Criar nova petição inicial",
+    "description": "Cria uma ou mais petições vinculadas ao workspace do `api_key` informado.\n\n- O corpo deve ser um objeto JSON ou uma lista de objetos. Objetos únicos são tratados como uma lista com um item.\n- Os campos `tribunal` e `instancia` são obrigatórios. O sistema do tribunal (`sistema`) é opcional para casos em que o tribunal possui apenas um sistema, porém será rejeitado se não for enviado e não puder ser inferido automaticamente.\n- Quando enviados, `tribunal` e `sistema` devem corresponder exatamente aos valores disponibilizados no endpoint `GET /api/v1/complaintsandpleadings/courts`, respeitando siglas e nomes padronizados.\n- A instância aceita apenas os valores `1` (1º grau), `2` (2º grau) ou `recursal` (Turmas Recursais).\n- É possível informar IDs de partes já existentes (`idpoloativo`, `idpolopassivo`). Cada campo aceita um único identificador ou uma lista (array) de IDs. As partes podem ser criadas a partir do endpoint `POST /api/v1/party`.\n- Informe `ufTribunal` apenas quando a detecção automática da UF do tribunal não for possível.\n- Cada item retorna o status individual (`sucesso` ou `erro`), a mensagem de processamento e os dados resultantes ou rejeitados.\n\nFluxo recomendado:\n1. `POST /api/v1/complaint` com os dados processuais para gerar `idpeticoes` e `idprocessos` de cada item aceito.\n2. `PUT /api/v1/complaint` para preencher os campos do processo exigidos pelo tribunal/sistema (comarca, classe, assunto, competência, área, rito, `valorCausa` etc.). **Esta etapa é obrigatória antes do protocolo** — os campos variam conforme o tribunal e o sistema (ex.: TJSP/eSAJ exige comarca + competência + classe + assunto; TRT exige atividade econômica; TRF-2 exige rito; e assim por diante). Os campos faltantes são apontados no erro 422 do `POST /api/v1/complaint/send`.\n3. `POST /api/v1/complaintsandpleadings/file` anexando o PDF obrigatório de cada petição criada.\n4. `POST /api/v1/complaintsandpleadings/attachments` para anexos complementares, informando `fk_documentos_tipos` quando necessário.\n5. `GET /api/v1/complaintsandpleadings/types` para escolher a peça (`fk_peca`). Se a peça escolhida aparecer no mapa `pecas_auxiliares` da resposta, guarde também o `idpecas` da sub-peça — ele é obrigatório como `fk_peca_auxiliar` no envio.\n6. `POST /api/v1/complaint/send` para protocolar a petição inicial, informando `idpeticoes`, `idprocessos`, `fk_peca` e, quando exigido, `fk_peca_auxiliar`.\n",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "api_key",
+      "required": true,
+      "description": "Chave de API do workspace",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "example": [
+        {
+         "tribunal": "TJSP",
+         "instancia": "1",
+         "sistema": "esaj",
+         "idpoloativo": [
+          123,
+          789
+         ],
+         "idpolopassivo": [
+          456
+         ]
+        },
+        {
+         "tribunal": "TJBA",
+         "instancia": "recursal",
+         "sistema": "projudi"
+        }
+       ]
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Resultado do processamento de cada petição enviada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "type": "object",
+          "properties": {
+           "status": {
+            "type": "string",
+            "description": "Resultado individual da criação",
+            "enum": [
+             "sucesso",
+             "erro"
+            ]
+           },
+           "mensagem": {
+            "type": "string",
+            "description": "Mensagem detalhando o resultado do item"
+           },
+           "dados": {
+            "description": "Dados retornados pelo processamento ou payload rejeitado",
+            "nullable": true,
+            "type": "object"
+           },
+           "regra": {
+            "description": "Presente apenas nos itens com `status: sucesso`. Indica o\nfluxo (regra) que o cliente deve seguir para este processo,\nconforme o tribunal/sistema: quais campos precisam ser\npreenchidos (via `PUT /api/v1/complaint`) e o endpoint de\nconsulta de cada um. A chave `validations` mapeia cada campo\nexigido ao seu endpoint de referência.\n",
+            "type": "object",
+            "nullable": true,
+            "properties": {
+             "validations": {
+              "type": "object",
+              "description": "Mapa de campo obrigatório para o endpoint de consulta correspondente.",
+              "additionalProperties": {
+               "type": "object",
+               "properties": {
+                "endpoint": {
+                 "type": "string",
+                 "nullable": true,
+                 "description": "Endpoint para consultar os valores válidos do campo."
+                }
+               }
+              }
+             }
+            }
+           }
+          }
+         }
+        },
+        "example": [
+         {
+          "status": "sucesso",
+          "mensagem": "Processado com sucesso.",
+          "dados": {
+           "idpeticoes": 789,
+           "idprocessos": 456
+          },
+          "regra": {
+           "validations": {
+            "comarca": {
+             "endpoint": "/api/v1/complaint/district"
+            },
+            "competencia": {
+             "endpoint": "/api/v1/complaint/specialties"
+            },
+            "classe": {
+             "endpoint": "/api/v1/complaint/classes"
+            },
+            "area": {
+             "endpoint": "/api/v1/complaint/areas"
+            },
+            "assunto": {
+             "endpoint": "/api/v1/complaint/subjects"
+            }
+           }
+          }
+         },
+         {
+          "status": "erro",
+          "mensagem": "Campos obrigatórios ausentes tribunal e instancia.",
+          "dados": {
+           "tribunal": "",
+           "instancia": null
+          }
+         }
+        ]
+       }
+      }
+     },
+     "400": {
+      "description": "JSON inválido ou formato não suportado"
+     },
+     "401": {
+      "description": "API key not provided"
+     },
+     "429": {
+      "description": "Rate limit excedido (120/min) ou timeout progressivo por polling. Consulte a introdução da documentação para os detalhes do payload e cabeçalho `Retry-After`."
+     }
+    }
    }
   },
   "/api/v1/complaintsandpleadings/attachment/types": {
@@ -6346,6 +6491,2060 @@
      },
      "429": {
       "description": "Rate limit excedido (120/min)."
+     }
+    }
+   }
+  },
+  "/api/v1/pleading": {
+   "post": {
+    "tags": [
+     "Pleadings"
+    ],
+    "summary": "Criar petição intermediária",
+    "description": "Cria uma petição intermediária.\nSalve o `idpeticoes`, que deve ser usado nas\nrotas de envio de anexos e do arquivo principal.\n\n**Sistema do processo:** o processo precisa ter um sistema de tribunal\ndefinido. Se o tribunal do processo (na instância dele) tiver **apenas um\nsistema**, ele é definido automaticamente e a criação prossegue. Quando há\n**mais de um** sistema (ou nenhum), a plataforma não consegue inferir qual\nse aplica e a criação retorna **422** com o campo `sistemas_disponiveis`;\nescolha um e defina-o em `POST /api/v1/lawsuit/court-system` antes de criar\na petição. Quando o processo tem instância (grau), a lista de\n`sistemas_disponiveis` é filtrada também pela instância (a instância\nretorna no campo `instancia` do erro).\n\n**Tipo especial (opcional):** o campo `tipo` permite criar tipos\nespecíficos de intermediária, quando o sistema do processo permitir:\n- `habilitacao_nos_autos` — apenas para processos do sistema **PJe**;\n- `quesitos_parte_autora` — apenas para processos do sistema **eProc**;\n- `quesitos_complementares` — apenas para processos do sistema **eProc**.\n\nSe `tipo` não for enviado, cria uma intermediária **normal**. Enviar um\n`tipo` para um sistema incompatível retorna **422**.\n\nPara `tipo: habilitacao_nos_autos`, os campos `tutela_antecipada`,\n`custas_recolhidas` e `numero_guia` são **ignorados** (mesmo se enviados).\n\nPara `tipo: quesitos_parte_autora` e `tipo: quesitos_complementares`, a\n**peça já é definida automaticamente** na criação — por isso `fk_peca` é\n**dispensado** no `POST /api/v1/pleading/send` desses tipos.\n\nFluxo recomendado:\n0. _(Opcional)_ `GET /api/v1/pleading/notices-to-comply` para consultar intimações pendentes de cumprimento no processo. Guarde os `idintimacoes` que deseja responder.\n1. `POST /api/v1/pleading` para gerar o identificador da petição.\n2. `POST /api/v1/complaintsandpleadings/file` enviando o PDF principal com `idpeticoes` e `idprocessos` retornados.\n3. `POST /api/v1/complaintsandpleadings/attachments` para anexos complementares, quando necessário.\n4. `GET /api/v1/complaintsandpleadings/types` para escolher a peça (`fk_peca`). Se a peça escolhida aparecer no mapa `pecas_auxiliares` da resposta, guarde também o `idpecas` da sub-peça — ele é obrigatório como `fk_peca_auxiliar` no envio.\n5. `POST /api/v1/pleading/send` definindo `fk_peca` (e `fk_peca_auxiliar`, quando exigido) e demais dados do protocolo para concluir o envio. Opcionalmente, envie no body JSON o campo `intimacoes` com os IDs das intimações a cumprir.\n",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "api_key",
+      "required": true,
+      "description": "Chave de API do workspace",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "fk_processo": {
+          "type": "integer",
+          "description": "Identificador do processo já existente no workspace"
+         },
+         "tutela_antecipada": {
+          "type": "integer"
+         },
+         "fk_certificado": {
+          "type": "integer",
+          "description": "Identificador do certificado ativo pertencente a um usuário do workspace"
+         },
+         "custas_recolhidas": {
+          "type": "integer"
+         },
+         "numero_guia": {
+          "type": "array",
+          "description": "Lista das numerações das guias de custas recolhidas",
+          "items": {
+           "type": "string"
+          }
+         },
+         "tipo": {
+          "type": "string",
+          "description": "Tipo especial de intermediária (opcional). Ausente = intermediária normal. Regras por sistema: habilitacao_nos_autos (PJe); quesitos_parte_autora e quesitos_complementares (eProc).",
+          "enum": [
+           "habilitacao_nos_autos",
+           "quesitos_parte_autora",
+           "quesitos_complementares"
+          ]
+         }
+        },
+        "required": [
+         "fk_processo",
+         "fk_certificado"
+        ]
+       },
+       "examples": {
+        "intermediaria_normal": {
+         "summary": "Intermediária normal (sem tipo)",
+         "value": {
+          "fk_processo": 456,
+          "fk_certificado": 34,
+          "tutela_antecipada": 0,
+          "custas_recolhidas": 1,
+          "numero_guia": [
+           "123456789",
+           "987654321"
+          ]
+         }
+        },
+        "habilitacao_nos_autos_pje": {
+         "summary": "Habilitação nos autos (PJe)",
+         "value": {
+          "fk_processo": 456,
+          "fk_certificado": 34,
+          "tipo": "habilitacao_nos_autos"
+         }
+        },
+        "quesitos_eproc": {
+         "summary": "Quesitos da parte autora (eProc)",
+         "value": {
+          "fk_processo": 456,
+          "fk_certificado": 34,
+          "tipo": "quesitos_parte_autora"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Resultado da operação",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "hash_peticao": {
+           "type": "string"
+          },
+          "idpeticoes": {
+           "type": "integer"
+          }
+         }
+        },
+        "examples": {
+         "sucesso": {
+          "summary": "Petição criada",
+          "value": {
+           "hash_peticao": "9fa0d4c3f2",
+           "idpeticoes": 123
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Requisição inválida",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "json_invalido": {
+          "summary": "JSON inválido",
+          "value": {
+           "error": "Invalid JSON payload"
+          }
+         },
+         "campo_obrigatorio": {
+          "summary": "Campo obrigatório ausente",
+          "value": {
+           "error": "Missing field: fk_certificado"
+          }
+         },
+         "admin_nao_encontrado": {
+          "summary": "Workspace sem administrador para vincular a petição",
+          "value": {
+           "error": "Administrador do workspace nao encontrado"
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "API key not provided",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "API key not provided"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Workspace, processo ou certificado não localizado",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "workspace_inexistente": {
+          "summary": "Workspace não encontrado",
+          "value": {
+           "error": "API key not found"
+          }
+         },
+         "processo_invalido": {
+          "summary": "Processo não pertence ao workspace",
+          "value": {
+           "error": "Processo não encontrado para este workspace"
+          }
+         },
+         "certificado_nao_encontrado": {
+          "summary": "Certificado não pertence ao workspace ou está inativo",
+          "value": {
+           "error": "Certificado não encontrado ou inativo para este workspace"
+          }
+         },
+         "certificado_invalido": {
+          "summary": "Certificado sem arquivo associado",
+          "value": {
+           "error": "Certificado inválido"
+          }
+         }
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Processo sem sistema, tipo inválido ou incompatível com o sistema do processo",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          },
+          "tribunal": {
+           "type": "string",
+           "description": "Tribunal do processo (presente no erro de processo sem sistema)."
+          },
+          "instancia": {
+           "type": "string",
+           "nullable": true,
+           "description": "Instância (grau) do processo, quando definida; usada para filtrar sistemas_disponiveis. null quando o processo não tem instância."
+          },
+          "sistemas_disponiveis": {
+           "type": "array",
+           "description": "Sistemas que podem ser definidos para o tribunal do processo (presente no erro de processo sem sistema). Filtrados também pela instância do processo, quando ela existir.",
+           "items": {
+            "type": "string"
+           }
+          }
+         }
+        },
+        "examples": {
+         "processo_sem_sistema": {
+          "summary": "Processo sem sistema (com instância — sistemas filtrados pela instância)",
+          "value": {
+           "error": "O processo não possui um sistema de tribunal definido. Defina o sistema do processo em POST /api/v1/lawsuit/court-system antes de criar a petição intermediária.",
+           "tribunal": "TJRS",
+           "instancia": "1",
+           "sistemas_disponiveis": [
+            "eproc",
+            "pje"
+           ]
+          }
+         },
+         "processo_sem_sistema_sem_instancia": {
+          "summary": "Processo sem sistema (sem instância — todos os sistemas do tribunal)",
+          "value": {
+           "error": "O processo não possui um sistema de tribunal definido. Defina o sistema do processo em POST /api/v1/lawsuit/court-system antes de criar a petição intermediária.",
+           "tribunal": "TJRS",
+           "instancia": null,
+           "sistemas_disponiveis": [
+            "eproc",
+            "pje"
+           ]
+          }
+         },
+         "tipo_invalido": {
+          "summary": "Valor de tipo não reconhecido",
+          "value": {
+           "error": "tipo inválido. Valores aceitos: habilitacao_nos_autos, quesitos_parte_autora, quesitos_complementares."
+          }
+         },
+         "tipo_sistema_incompativel": {
+          "summary": "Tipo não permitido para o sistema do processo",
+          "value": {
+           "error": "O tipo \"habilitacao_nos_autos\" só é permitido para processos do sistema PJe."
+          }
+         }
+        }
+       }
+      }
+     },
+     "405": {
+      "description": "Método não permitido",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "Method not allowed"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/complaintsandpleadings/file": {
+   "post": {
+    "tags": [
+     "Complaints and Pleadings"
+    ],
+    "summary": "Enviar arquivo principal da petição",
+    "description": "Upload do documento principal da petição.\nSomente arquivos em PDF sao aceitos.\n",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "api_key",
+      "required": true,
+      "description": "Chave de API do workspace",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "idpeticoes",
+      "required": true,
+      "description": "ID da petição",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "idprocessos",
+      "required": true,
+      "description": "ID do processo",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "file": {
+          "type": "string",
+          "format": "binary"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Upload realizado com sucesso",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "string",
+         "description": "Mensagem de sucesso (string JSON)",
+         "example": "success"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Requisição inválida (parâmetro ausente, petição não pertence ao processo informado ou falha no upload do arquivo)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "campo_ausente": {
+          "summary": "Parâmetro obrigatório não enviado",
+          "value": {
+           "error": "Missing field: idpeticoes"
+          }
+         },
+         "peticao_processo_divergente": {
+          "summary": "Petição não pertence ao processo informado",
+          "value": {
+           "error": "Petição não pertence ao processo informado"
+          }
+         },
+         "arquivo_nao_pdf": {
+          "summary": "Arquivo enviado não é PDF",
+          "value": {
+           "status": "error",
+           "message": "Somente arquivos PDF são aceitos."
+          }
+         },
+         "falha_upload": {
+          "summary": "Falha ao enviar o arquivo",
+          "value": {
+           "status": "error",
+           "message": "Falha ao enviar arquivo"
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Chave de API não informada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "API key not provided"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Chave de API ou petição não encontrada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "api_key_invalida": {
+          "summary": "Chave de API não encontrada",
+          "value": {
+           "error": "API key not found"
+          }
+         },
+         "peticao_nao_encontrada": {
+          "summary": "Petição não encontrada para o workspace",
+          "value": {
+           "status": "error",
+           "message": "Petição não encontrada."
+          }
+         }
+        }
+       }
+      }
+     },
+     "405": {
+      "description": "Método não permitido (esperado POST)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "Method not allowed"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Parâmetro com formato inválido (idpeticoes/idprocessos) ou estado da petição não permite adicionar o arquivo",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "idpeticoes_invalido": {
+          "summary": "idpeticoes não é inteiro positivo",
+          "value": {
+           "error": "idpeticoes deve ser inteiro > 0."
+          }
+         },
+         "idprocessos_invalido": {
+          "summary": "idprocessos não é inteiro positivo",
+          "value": {
+           "error": "idprocessos deve ser inteiro > 0."
+          }
+         },
+         "status_nao_permite": {
+          "summary": "Status da petição não permite adicionar o arquivo",
+          "value": {
+           "status": "error",
+           "message": "O status da petição não permite adicionar o arquivo."
+          }
+         }
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "Falha ao enviar o arquivo para o storage ou erro inesperado no processamento",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "falha_storage": {
+          "summary": "Falha ao enviar arquivo para o storage",
+          "value": {
+           "status": "error",
+           "message": "Falha ao enviar arquivo para o storage"
+          }
+         },
+         "erro_inesperado": {
+          "summary": "Erro inesperado no processamento",
+          "value": {
+           "status": "error",
+           "message": "Falha ao enviar arquivo"
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/complaintsandpleadings/attachments": {
+   "post": {
+    "tags": [
+     "Complaints and Pleadings"
+    ],
+    "summary": "Enviar anexos da petição",
+    "description": "Upload de anexos para a petição.\nSomente arquivos em PDF sao aceitos.\n\n**Regras específicas de quesitos:**\n- **Quesitos complementares** — **não** permite anexos (retorna 422).\n- **Quesitos da parte autora** — permite **apenas um** anexo, que deve ser\n  um **arquivo de vídeo** (extensão `.mp4`, `.wmv`, `.mpg` ou `.mpeg`) com\n  `fk_documentos_tipos = 32948` (Arquivo de vídeo). Enviar outro tipo,\n  outra extensão ou um segundo anexo retorna 422.\n\n**Planilha de cálculos em tribunais TRT (PJe-Calc):**\n\nQuando o `fk_documentos_tipos` informado corresponde a\n**\"Planilha de Cálculos\"** ou **\"Planilha de Atualização de Cálculos\"**\nE o processo é de um tribunal **TRT** (`sistema_tribunal = pje_trt`),\nos campos `credor` e `devedor` passam a ser **obrigatórios** no corpo da\nrequisição, e devem representar **partes diferentes** — a mesma regra do\npeticionamento na plataforma.\n\n- Consulte os polos disponíveis em\n  `GET /api/v1/complaintsandpleadings/attachments/parties` e use o `id` e\n  o `polo` retornados por lá.\n- Cada campo é enviado como **string JSON**:\n  `{\"id\": 958861, \"polo\": \"ativo\"}` (multipart não carrega objeto).\n- O arquivo `.pjc` (planilha do PJe-Calc) é **opcional** e vai no campo\n  `pjc`. A ausência dele **não** impede o envio do anexo.\n- Omitir `credor`/`devedor`, informar formato inválido ou usar a mesma\n  parte nos dois retorna **422** com o campo `consulte` apontando o\n  endpoint de polos.\n\nPara anexos de qualquer outro tipo de documento, ou em tribunais que não\nsejam TRT, esses campos são ignorados e nada muda.\n",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "api_key",
+      "required": true,
+      "description": "Chave de API do workspace",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "idpeticoes",
+      "required": true,
+      "description": "ID da petição",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_documentos_tipos",
+      "required": true,
+      "description": "Tipo do documento anexado (conforme /api/v1/complaintsandpleadings/attachment/types)",
+      "schema": {
+       "type": "integer"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "multipart/form-data": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "file"
+        ],
+        "properties": {
+         "file": {
+          "type": "string",
+          "format": "binary"
+         },
+         "descricao_outros": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Descrição livre do anexo. Aplicável quando o tipo de documento selecionado corresponde à classificação \"Outros\" (eproc, PJe, Projudi e tribunais compatíveis).\nLimite de 100 caracteres para sistemas eProc e 200 para os demais.\n"
+         },
+         "credor": {
+          "type": "string",
+          "description": "**Obrigatório apenas** quando o anexo é \"Planilha de Cálculos\"/\"Planilha de\nAtualização de Cálculos\" em tribunal TRT. String JSON com o `id` e o `polo`\nda parte, conforme retornado por\n`GET /api/v1/complaintsandpleadings/attachments/parties`.\nDeve ser uma parte **diferente** do `devedor`.\n",
+          "example": "{\"id\": 958861, \"polo\": \"ativo\"}"
+         },
+         "devedor": {
+          "type": "string",
+          "description": "**Obrigatório apenas** quando o anexo é \"Planilha de Cálculos\"/\"Planilha de\nAtualização de Cálculos\" em tribunal TRT. Mesmo formato do `credor`, com\nparte **diferente** dele.\n",
+          "example": "{\"id\": 220888, \"polo\": \"passivo\"}"
+         },
+         "pjc": {
+          "type": "string",
+          "format": "binary",
+          "description": "**Opcional.** Arquivo `.pjc` (planilha do PJe-Calc) associado ao anexo de\nplanilha de cálculos em tribunal TRT.\n\nO campo tem três desfechos:\n\n- **não enviado** — permitido; o anexo é salvo normalmente;\n- **`.pjc` válido** — armazenado; resposta igual à de cima;\n- **arquivo que não é `.pjc`** (um PDF, por exemplo) ou arquivo vazio —\n  **erro 422** e nada é gravado: nem o anexo, nem credor/devedor.\n\nOs dois primeiros são sucesso e respondem igual. Já enviar um arquivo de\noutro tipo NÃO é tratado como \"não enviei\": quem manda um arquivo espera\nque ele seja usado ou recusado, nunca descartado em silêncio. Deixe o\ncampo em branco quando não houver planilha a enviar.\n"
+         }
+        }
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Upload realizado com sucesso.\n\nPara anexos comuns a resposta é a string `\"success\"`. Quando a regra do\nPJe-Calc se aplica (planilha de cálculos em TRT), a resposta é um objeto\ncom `status`, `message` e `idpeticoes_documentos`.\n\nEnviar ou não o `.pjc` não muda a resposta — os dois são sucesso. A única\nexceção é `pjc_erro`, presente apenas quando o `.pjc` era válido mas\n**falhou ao ser armazenado** (indisponibilidade do storage): o anexo e\ncredor/devedor ficam gravados, porque o `.pjc` é opcional.\n\nArquivo enviado que **não é** `.pjc` não aparece aqui: é recusado com **422**.\n",
+      "content": {
+       "application/json": {
+        "schema": {
+         "oneOf": [
+          {
+           "type": "string",
+           "description": "Mensagem de sucesso (string JSON) — anexos fora da regra do PJe-Calc.",
+           "example": "success"
+          },
+          {
+           "type": "object",
+           "description": "Anexo de planilha de cálculos em TRT.",
+           "properties": {
+            "status": {
+             "type": "string"
+            },
+            "message": {
+             "type": "string"
+            },
+            "idpeticoes_documentos": {
+             "type": "integer"
+            },
+            "pjc_erro": {
+             "type": "string",
+             "description": "Presente só quando o `.pjc` era válido mas não pôde ser armazenado\n(falha de infraestrutura). O anexo e as partes seguem gravados.\n"
+            }
+           }
+          }
+         ]
+        },
+        "examples": {
+         "sucesso": {
+          "summary": "Anexo comum salvo (fora da regra do PJe-Calc)",
+          "value": "success"
+         },
+         "sucesso_planilha": {
+          "summary": "Planilha em TRT salva (com ou sem o `.pjc`)",
+          "value": {
+           "status": "success",
+           "message": "success",
+           "idpeticoes_documentos": 2580431
+          }
+         },
+         "pjc_falha_storage": {
+          "summary": "`.pjc` válido, mas o storage falhou (anexo preservado)",
+          "value": {
+           "status": "success",
+           "message": "success",
+           "idpeticoes_documentos": 2580431,
+           "pjc_erro": "Falha ao armazenar o arquivo .pjc. O anexo foi salvo sem o arquivo de cálculos."
+          }
+         }
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Requisição inválida (parâmetro ausente, tipo de documento inválido ou falha de validação/processamento do arquivo)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "campo_ausente": {
+          "summary": "Parâmetro obrigatório não enviado",
+          "value": {
+           "error": "Missing field: idpeticoes"
+          }
+         },
+         "tipo_invalido": {
+          "summary": "Tipo de documento não permitido para a petição",
+          "value": {
+           "status": "error",
+           "message": "Tipo de documento informado não é válido para a petição. Consulte os tipos disponíveis para a petição em /api/v1/complaintsandpleadings/attachment/types."
+          }
+         },
+         "arquivo_vazio": {
+          "summary": "Arquivo vazio ou inválido",
+          "value": {
+           "status": "error",
+           "message": "Arquivo enviado está vazio (0 KB). Verifique o arquivo de origem e tente novamente."
+          }
+         },
+         "extensao_invalida": {
+          "summary": "Extensão não permitida para o tribunal",
+          "value": {
+           "status": "error",
+           "message": "Extensão de arquivo não permitida para este tribunal."
+          }
+         },
+         "tamanho_excedido": {
+          "summary": "Arquivo excede o limite do tribunal",
+          "value": {
+           "status": "error",
+           "message": "Tamanho do arquivo excede o limite permitido para este tribunal."
+          }
+         },
+         "arquivo_corrompido": {
+          "summary": "Arquivo corrompido ou protegido por senha",
+          "value": {
+           "status": "error",
+           "message": "Arquivo corrompido ou protegido por senha. Verifique o arquivo de origem e tente novamente."
+          }
+         },
+         "falha_upload": {
+          "summary": "Arquivo não enviado ou falha no upload",
+          "value": {
+           "error": "Arquivo não encontrado no envio"
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Chave de API não informada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "API key not provided"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Chave de API ou petição não encontrada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "api_key_invalida": {
+          "summary": "Chave de API não encontrada",
+          "value": {
+           "error": "API key not found"
+          }
+         },
+         "peticao_nao_encontrada": {
+          "summary": "Petição não encontrada para o workspace",
+          "value": {
+           "status": "error",
+           "message": "Petição não encontrada."
+          }
+         }
+        }
+       }
+      }
+     },
+     "405": {
+      "description": "Método não permitido (esperado POST)",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "Method not allowed"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Parâmetro com formato inválido (idpeticoes/fk_documentos_tipos), estado da petição\nnão permite anexos, ou credor/devedor ausentes/inválidos no anexo de planilha de\ncálculos em tribunal TRT.\n",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          },
+          "consulte": {
+           "type": "string",
+           "description": "Endpoint a consultar para obter os polos (presente nos erros de credor/devedor)."
+          }
+         }
+        },
+        "examples": {
+         "idpeticoes_invalido": {
+          "summary": "idpeticoes não é inteiro positivo",
+          "value": {
+           "error": "idpeticoes deve ser inteiro > 0."
+          }
+         },
+         "fk_documentos_tipos_invalido": {
+          "summary": "fk_documentos_tipos não é inteiro positivo",
+          "value": {
+           "error": "fk_documentos_tipos deve ser inteiro > 0."
+          }
+         },
+         "status_nao_permite": {
+          "summary": "Status da petição não permite adicionar anexos",
+          "value": {
+           "status": "error",
+           "message": "O status da petição não permite adicionar anexos."
+          }
+         },
+         "pjc_partes_ausentes": {
+          "summary": "Planilha de cálculos em TRT sem credor/devedor",
+          "value": {
+           "status": "error",
+           "message": "Anexos do tipo \"Planilha de Cálculos\"/\"Planilha de Atualização de Cálculos\" em tribunais TRT exigem os campos credor e devedor. Consulte os polos do processo em GET /api/v1/complaintsandpleadings/attachments/parties?idpeticoes=697527 e informe credor e devedor no formato {\"id\": <int>, \"polo\": \"ativo\"|\"passivo\"}.",
+           "consulte": "GET /api/v1/complaintsandpleadings/attachments/parties"
+          }
+         },
+         "pjc_parte_invalida": {
+          "summary": "credor/devedor em formato inválido",
+          "value": {
+           "status": "error",
+           "message": "credor inválido. Consulte os polos do processo em GET /api/v1/complaintsandpleadings/attachments/parties?idpeticoes=697527 e informe credor e devedor no formato {\"id\": <int>, \"polo\": \"ativo\"|\"passivo\"}.",
+           "consulte": "GET /api/v1/complaintsandpleadings/attachments/parties"
+          }
+         },
+         "pjc_partes_iguais": {
+          "summary": "Credor e devedor são a mesma parte",
+          "value": {
+           "status": "error",
+           "message": "Credor e Devedor não podem ser a mesma parte.",
+           "consulte": "GET /api/v1/complaintsandpleadings/attachments/parties"
+          }
+         },
+         "pjc_parte_fora_do_processo": {
+          "summary": "Parte informada não pertence ao processo",
+          "value": {
+           "status": "error",
+           "message": "credor não é uma parte deste processo. Consulte os polos do processo em GET /api/v1/complaintsandpleadings/attachments/parties?idpeticoes=697527 e informe credor e devedor no formato {\"id\": <int>, \"polo\": \"ativo\"|\"passivo\"}.",
+           "consulte": "GET /api/v1/complaintsandpleadings/attachments/parties"
+          }
+         },
+         "pjc_arquivo_invalido": {
+          "summary": "Arquivo enviado no campo `pjc` não é um `.pjc`",
+          "value": {
+           "status": "error",
+           "message": "O arquivo enviado no campo pjc não é um arquivo .pjc válido. O campo pjc aceita apenas arquivos com extensão .pjc (exportados do PJe-Calc); deixe-o em branco se não houver planilha de cálculos a enviar."
+          }
+         },
+         "pjc_arquivo_vazio": {
+          "summary": "Arquivo enviado no campo `pjc` está vazio",
+          "value": {
+           "status": "error",
+           "message": "O arquivo enviado no campo pjc está vazio (0 KB). Reenvie o anexo com um arquivo .pjc válido."
+          }
+         }
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "Falha ao enviar o arquivo para o storage, erro inesperado no processamento,\nou o anexo foi criado mas credor/devedor não puderam ser gravados.\n",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          },
+          "idpeticoes_documentos": {
+           "type": "integer",
+           "description": "Presente quando o anexo foi criado — identifica a linha cujas partes ficaram sem gravar."
+          }
+         }
+        },
+        "examples": {
+         "falha_storage": {
+          "summary": "Falha ao enviar o arquivo",
+          "value": {
+           "error": "Erro ao enviar arquivo"
+          }
+         },
+         "partes_nao_gravadas": {
+          "summary": "Anexo criado, mas credor/devedor não foram gravados",
+          "value": {
+           "status": "error",
+           "message": "O anexo foi salvo, mas não foi possível gravar Credor e Devedor. Defina Credor e Devedor do anexo idpeticoes_documentos=2580431 na tela de peticionamento da plataforma — sem elas o envio da petição será recusado.",
+           "idpeticoes_documentos": 2580431
+          }
+         }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/complaintsandpleadings/status": {
+   "post": {
+    "tags": [
+     "Complaints and Pleadings"
+    ],
+    "summary": "Consultar status da petição",
+    "description": "Informa o andamento atual da petição identificada pelo ID.",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "api_key",
+      "required": true,
+      "description": "Chave de API do workspace",
+      "schema": {
+       "type": "string"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "properties": {
+         "idpeticoes": {
+          "type": "integer"
+         }
+        },
+        "required": [
+         "idpeticoes"
+        ]
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Status atual da petição",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "integer"
+        },
+        "example": 3
+       }
+      }
+     },
+     "400": {
+      "description": "Requisição inválida",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        },
+        "examples": {
+         "formato_invalido": {
+          "summary": "Formato do payload inválido",
+          "value": {
+           "error": "Expected format: object"
+          }
+         },
+         "campo_obrigatorio": {
+          "summary": "Campo obrigatório ausente",
+          "value": {
+           "error": "Missing field: idpeticoes"
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "API key not provided",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        },
+        "example": {
+         "error": "API key not provided"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Recurso não encontrado",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        },
+        "examples": {
+         "workspace_inexistente": {
+          "summary": "Workspace não encontrado para a API key",
+          "value": {
+           "error": "API key not found"
+          }
+         },
+         "peticao_inexistente": {
+          "summary": "Petição ou status não localizado no workspace",
+          "value": {
+           "error": "Petição não encontrada para este workspace"
+          }
+         }
+        }
+       }
+      }
+     },
+     "405": {
+      "description": "Método não permitido",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        },
+        "example": {
+         "error": "Method not allowed"
+        }
+       }
+      }
+     },
+     "429": {
+      "description": "Limite de consultas excedido",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        },
+        "example": {
+         "error": "Too many requests"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/pleading/send": {
+   "post": {
+    "tags": [
+     "Pleadings"
+    ],
+    "summary": "Protocolar petição intermediária",
+    "description": "O ID do workspace é obtido automaticamente a partir da `api_key`.\n\nOpcionalmente, envie no body JSON o campo `intimacoes` com um array de IDs\nde intimações a marcar como cumpridas (obtidos via `/api/v1/pleading/notices-to-comply`).\nAs intimações serão vinculadas à petição após o envio bem-sucedido.\n\nO `fk_peca_auxiliar` é a **sub-peça** da peça selecionada. Em tribunais/sistemas\nde catálogo enxuto, a peça funciona como categoria e a classificação real vem da\nsub-peça: consulte `GET /api/v1/complaintsandpleadings/types` e, se a peça usada\naparecer no mapa `pecas_auxiliares`, o `fk_peca_auxiliar` é **obrigatório** —\nomiti-lo retorna **422**. Quando a peça não possui sub-peças, o parâmetro **não\ndeve ser enviado**. Não confundir com o `fk_documento_auxiliar` abaixo, que é do\neProc e classifica o *documento*, não a peça.\n\nO `fk_documento_auxiliar` identifica o tipo de documento auxiliar da petição\n(consulte os tipos em `/api/v1/complaintsandpleadings/attachment/types`). **É\nobrigatório quando o sistema do tribunal é eProc** — sua ausência retorna **400**\norientando a consultar os tipos em `/api/v1/complaintsandpleadings/attachment/types`.\nNos demais sistemas é opcional; quando\ninformado, precisa ser um tipo existente e compatível com o evento/peça\nselecionado (caso contrário, retorna **400**).\n\nO `nivel_sigilo_peticao` define o nível de sigilo da petição. **É obrigatório\nquando o sistema do tribunal é eProc** — sua ausência retorna **400**\n`Missing field: nivel_sigilo_peticao`. Valores aceitos:\n- `0` — Sem Sigilo (Nível 0)\n- `1` — Segredo de Justiça (Nível I)\n- `2` — Segredo de Justiça (Nível II) — **exclusivo** do documento auxiliar\n  \"Pedido de Utilização de SISBAJUD\": enviar `2` com outro tipo de documento\n  retorna **400**; e, quando o `fk_documento_auxiliar` é o tipo \"Pedido de\n  Utilização de SISBAJUD\", o `nivel_sigilo_peticao` **deve** ser `2`\n  (caso contrário, retorna **400**).\n\nO campo `solicitantes` é **obrigatório** — os requerentes da petição\n(mesmo fluxo da plataforma). Cada item é um objeto:\n- `{ \"id\": <id da parte>, \"polo\": \"ativo\"|\"passivo\" }` — uma **parte do\n  processo** (`ativo` = cliente, `passivo` = réu). Precisa **pertencer ao\n  processo desta petição** (senão retorna **400**); consulte as\n  disponíveis em `GET /api/v1/pleading/requesters`.\n- `{ \"polo\": \"outros\", \"nome\": \"...\" }` — um requerente avulso (**Outros**).\n  O `nome` é **obrigatório** quando o tribunal é **TRT** ou **TJRJ + dcp**\n  (senão retorna **400**); nos demais é opcional. Com `nome`, o requerente\n  é registrado como cliente; sem `nome`, fica como \"outros\" genérico.\n\nInforme **ao menos um** solicitante.\n\n**Habilitação nos autos (petições criadas com `tipo: habilitacao_nos_autos`):**\nalém do `solicitantes` obrigatório, aceita **opcionalmente** as declarações\ndo instrumento de mandato (`0`/`1`), **mutuamente exclusivas** (envie no\nmáximo uma com valor `1`):\n- `declaracao_mandato_apresentado` — \"Declaro, sob as penas da lei, que\n  neste ato apresentei instrumento de mandato.\";\n- `protesto_mandato_oportuno` — \"Protesto pela apresentação oportuna do\n  instrumento de mandato, na forma da lei.\".\n\nEnviar as duas com `1` retorna **422**. Em petições de outros tipos, esses\ncampos são ignorados.\n\n### Custo\n\nEste endpoint é **cobrado por requisição** (preço padrão **R$ 0,25**). A cobrança ocorre quando\no protocolo é aceito; erros de validação **não consomem saldo**.\n\nVincular intimações pelo campo `intimacoes` **não altera o custo** — o preço é por protocolo,\nindependentemente de quantas intimações são marcadas como cumpridas.\n\nO preço vigente para o seu workspace (que pode ser negociado) está na seção **Preços** do\n[Painel da API](/painel-api). Sem saldo suficiente a requisição **não é executada** e a\nresposta é `402`.\n\nPor ser um `POST`, **não vale a isenção de 24 horas** dos `GET` idênticos: cada solicitação\naceita é uma cobrança. Somente respostas `2xx` são cobradas.\n",
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "type": "object",
+        "required": [
+         "solicitantes"
+        ],
+        "properties": {
+         "intimacoes": {
+          "type": "array",
+          "description": "IDs das intimações a marcar como cumpridas (opcional)",
+          "items": {
+           "type": "integer"
+          }
+         },
+         "declaracao_mandato_apresentado": {
+          "type": "integer",
+          "enum": [
+           0,
+           1
+          ],
+          "description": "Apenas para habilitação nos autos (opcional). 1 = \"Declaro, sob as penas da lei, que neste ato apresentei instrumento de mandato.\" Mutuamente exclusivo com protesto_mandato_oportuno."
+         },
+         "protesto_mandato_oportuno": {
+          "type": "integer",
+          "enum": [
+           0,
+           1
+          ],
+          "description": "Apenas para habilitação nos autos (opcional). 1 = \"Protesto pela apresentação oportuna do instrumento de mandato, na forma da lei.\" Mutuamente exclusivo com declaracao_mandato_apresentado."
+         },
+         "solicitantes": {
+          "type": "array",
+          "minItems": 1,
+          "description": "OBRIGATÓRIO. Requerentes da petição. Cada item: uma PARTE do processo ({ id, polo: ativo|passivo }, disponíveis em GET /api/v1/pleading/requesters) ou um requerente avulso \"Outros\" ({ polo: outros, nome }). Para \"outros\", o nome é obrigatório em TRT e TJRJ+dcp.",
+          "items": {
+           "type": "object",
+           "required": [
+            "polo"
+           ],
+           "properties": {
+            "id": {
+             "type": "integer",
+             "description": "ID da parte (idclientes para polo ativo, idreus para polo passivo). Obrigatório para polo ativo/passivo; ignorado para \"outros\"."
+            },
+            "polo": {
+             "type": "string",
+             "enum": [
+              "ativo",
+              "passivo",
+              "outros"
+             ]
+            },
+            "nome": {
+             "type": "string",
+             "description": "Nome do requerente para polo \"outros\". Obrigatório quando o tribunal é TRT ou TJRJ+dcp."
+            }
+           }
+          }
+         }
+        }
+       },
+       "example": {
+        "intimacoes": [
+         123,
+         456
+        ],
+        "solicitantes": [
+         {
+          "id": 501,
+          "polo": "ativo"
+         },
+         {
+          "id": 777,
+          "polo": "passivo"
+         },
+         {
+          "polo": "outros",
+          "nome": "FULANO DE TAL"
+         }
+        ]
+       }
+      }
+     }
+    },
+    "parameters": [
+     {
+      "in": "query",
+      "name": "api_key",
+      "required": true,
+      "description": "Chave de API do workspace",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "idpeticoes",
+      "required": true,
+      "description": "ID da petição",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "idprocessos",
+      "required": true,
+      "description": "ID do processo",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_peca",
+      "required": false,
+      "description": "ID da peça selecionada. Obrigatório para intermediárias normais; para petições de quesitos (parte autora/complementares) é ignorado, pois a peça já é definida na criação.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_peca_auxiliar",
+      "required": false,
+      "description": "ID da peça auxiliar (sub-peça) da peça selecionada. **Obrigatório quando a peça usada no envio aparece no mapa `pecas_auxiliares` de /api/v1/complaintsandpleadings/types** — nesse caso, omiti-lo retorna 422. Precisa ser o `idpecas` de uma das sub-peças daquela peça. Quando a peça não possui sub-peças, NÃO envie o parâmetro (enviar retorna 422). Vale também para quesitos, cuja peça vem da própria petição.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "data_protocolo",
+      "required": false,
+      "description": "Agendamento opcional do protocolo nos formatos YYYY-MM-DD HH:MM:SS (data e hora) ou YYYY-MM-DD (apenas data, hora assumida como 00:00:00). Quando informada uma data/hora futura, o protocolo é agendado para o momento indicado.",
+      "schema": {
+       "type": "string",
+       "example": "2026-06-10 14:30:00"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_documento_auxiliar",
+      "required": false,
+      "description": "ID do tipo de documento auxiliar da petição (consulte /api/v1/complaintsandpleadings/attachment/types). Obrigatório quando o sistema do tribunal é eProc; opcional nos demais sistemas. Quando informado, precisa ser um tipo existente e compatível com o evento/peça selecionado.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "nivel_sigilo_peticao",
+      "required": false,
+      "description": "Nível de sigilo da petição. Obrigatório quando o sistema do tribunal é eProc. Valores: 0 = Sem Sigilo (Nível 0); 1 = Segredo de Justiça (Nível I); 2 = Segredo de Justiça (Nível II — exclusivo e obrigatório quando o fk_documento_auxiliar é o tipo \"Pedido de Utilização de SISBAJUD\").",
+      "schema": {
+       "type": "integer",
+       "enum": [
+        0,
+        1,
+        2
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Resultado do protocolo",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "status": "success"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Requisição inválida ou petição não está apta ao envio",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          },
+          "intimacoes_invalidas": {
+           "type": "array",
+           "description": "IDs de intimações que não pertencem ao processo (presente apenas no erro de intimações inválidas).",
+           "items": {
+            "type": "integer"
+           }
+          }
+         }
+        },
+        "examples": {
+         "campo_obrigatorio": {
+          "summary": "Campo obrigatório ausente",
+          "value": {
+           "error": "Missing field: fk_peca"
+          }
+         },
+         "peca_invalida": {
+          "summary": "Peça não disponível para a petição",
+          "value": {
+           "status": "error",
+           "message": "Peça informada não é válida para a petição."
+          }
+         },
+         "documento_auxiliar_ausente": {
+          "summary": "fk_documento_auxiliar ausente (obrigatório para eProc)",
+          "value": {
+           "status": "error",
+           "message": "O campo fk_documento_auxiliar é obrigatório para sistemas eProc. Consulte os tipos de documento disponíveis para a petição em /api/v1/complaintsandpleadings/attachment/types e informe o fk_documento_auxiliar correspondente."
+          }
+         },
+         "nivel_sigilo_ausente": {
+          "summary": "nivel_sigilo_peticao ausente (obrigatório para eProc)",
+          "value": {
+           "error": "Missing field: nivel_sigilo_peticao"
+          }
+         },
+         "nivel_sigilo_invalido": {
+          "summary": "nivel_sigilo_peticao com valor fora de 0/1/2",
+          "value": {
+           "status": "error",
+           "message": "nivel_sigilo_peticao inválido. Valores aceitos: 0 (Sem Sigilo — Nível 0), 1 (Segredo de Justiça — Nível I) e 2 (Segredo de Justiça — Nível II, exclusivo do documento auxiliar \"Pedido de Utilização de SISBAJUD\")."
+          }
+         },
+         "nivel_sigilo_2_sem_sisbajud": {
+          "summary": "Nível 2 sem o documento auxiliar SISBAJUD",
+          "value": {
+           "status": "error",
+           "message": "O nível de sigilo 2 (Segredo de Justiça — Nível II) só é permitido quando o documento auxiliar é \"Pedido de Utilização de SISBAJUD\"."
+          }
+         },
+         "sisbajud_exige_nivel_2": {
+          "summary": "Documento auxiliar SISBAJUD exige nível 2",
+          "value": {
+           "status": "error",
+           "message": "Para o documento auxiliar \"Pedido de Utilização de SISBAJUD\" o nivel_sigilo_peticao deve ser 2 (Segredo de Justiça — Nível II)."
+          }
+         },
+         "solicitante_ausente": {
+          "summary": "Solicitante ausente (campo obrigatório)",
+          "value": {
+           "status": "error",
+           "message": "Informe ao menos um solicitante no campo \"solicitantes\". Consulte as partes disponíveis em GET /api/v1/pleading/requesters."
+          }
+         },
+         "solicitante_fora_do_processo": {
+          "summary": "Solicitante não pertence ao processo da petição",
+          "value": {
+           "status": "error",
+           "message": "Um ou mais solicitantes são inválidos.",
+           "solicitantes_invalidos": [
+            "Solicitante não pertence ao processo desta petição (id=999, polo=ativo). Consulte as partes em GET /api/v1/pleading/requesters."
+           ]
+          }
+         },
+         "outros_sem_nome": {
+          "summary": "Solicitante \"Outros\" sem nome em tribunal que exige (TRT/TJRJ+dcp)",
+          "value": {
+           "status": "error",
+           "message": "Um ou mais solicitantes são inválidos.",
+           "solicitantes_invalidos": [
+            "Solicitante \"Outros\" exige o campo \"nome\" para este tribunal (TRT-2)."
+           ]
+          }
+         },
+         "nao_intermediaria": {
+          "summary": "Petição não é do tipo intermediária",
+          "value": {
+           "status": "error",
+           "message": "Petição não é intermediária."
+          }
+         },
+         "peca_nao_selecionada": {
+          "summary": "Petição sem peça selecionada",
+          "value": {
+           "status": "error",
+           "message": "Peça não selecionada."
+          }
+         },
+         "arquivo_ausente": {
+          "summary": "Arquivo da petição não anexado",
+          "value": {
+           "status": "error",
+           "message": "Arquivo da petição não adicionado."
+          }
+         },
+         "data_invalida": {
+          "summary": "data_protocolo em formato inválido",
+          "value": {
+           "status": "error",
+           "message": "Data de protocolo inválida. Use o formato YYYY-MM-DD ou YYYY-MM-DD HH:MM:SS."
+          }
+         },
+         "intimacoes_invalidas": {
+          "summary": "Intimações não pertencem ao processo",
+          "value": {
+           "status": "error",
+           "message": "Uma ou mais intimações não pertencem ao processo informado.",
+           "intimacoes_invalidas": [
+            987,
+            654
+           ]
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Chave de API não informada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "API key not provided"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Chave de API ou petição não encontrada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "api_key_nao_encontrada": {
+          "summary": "Chave de API não encontrada",
+          "value": {
+           "error": "API key not found"
+          }
+         },
+         "peticao_nao_encontrada": {
+          "summary": "Petição não encontrada para o workspace",
+          "value": {
+           "status": "error",
+           "message": "Petição não encontrada."
+          }
+         }
+        }
+       }
+      }
+     },
+     "405": {
+      "description": "Método não permitido",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "Method not allowed"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Status da petição não permite o envio",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "status": "error",
+         "message": "Status da petição não permite o envio."
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Parâmetro com formato inválido (idpeticoes/idprocessos/fk_peca) ou peça auxiliar ausente/indevida",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "campo": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "parametro_invalido": {
+          "summary": "idpeticoes/idprocessos/fk_peca não é inteiro positivo",
+          "value": {
+           "error": "idpeticoes deve ser inteiro > 0."
+          }
+         },
+         "peca_auxiliar_ausente": {
+          "summary": "A peça escolhida exige uma sub-peça e fk_peca_auxiliar não foi informado",
+          "value": {
+           "status": "error",
+           "message": "A peça selecionada exige a escolha de uma peça auxiliar. Consulte pecas_auxiliares em /api/v1/complaintsandpleadings/types e informe o fk_peca_auxiliar correspondente.",
+           "campo": "fk_peca_auxiliar"
+          }
+         },
+         "peca_auxiliar_de_outra_peca": {
+          "summary": "fk_peca_auxiliar não é sub-peça da peça informada em fk_peca",
+          "value": {
+           "status": "error",
+           "message": "Peça auxiliar informada não pertence à peça selecionada. Consulte pecas_auxiliares em /api/v1/complaintsandpleadings/types.",
+           "campo": "fk_peca_auxiliar"
+          }
+         },
+         "peca_sem_auxiliares": {
+          "summary": "fk_peca_auxiliar enviado para uma peça que não tem sub-peças",
+          "value": {
+           "status": "error",
+           "message": "A peça selecionada não possui peças auxiliares. Remova o fk_peca_auxiliar ou consulte pecas_auxiliares em /api/v1/complaintsandpleadings/types.",
+           "campo": "fk_peca_auxiliar"
+          }
+         }
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "Falha ao protocolar a petição",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "status": "error",
+         "message": "Erro ao enviar petição intermediária."
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/complaint/send": {
+   "post": {
+    "tags": [
+     "Complaints"
+    ],
+    "summary": "Protocolar petição inicial",
+    "description": "Envia (protocola) uma petição inicial já criada e com arquivo anexado.\nO ID do workspace é obtido automaticamente a partir da `api_key`.\n\nA data de protocolo aceita os formatos `YYYY-MM-DD HH:MM:SS` (data e hora) ou `YYYY-MM-DD`\n(apenas data, com a hora assumida como `00:00:00`). Se omitida, utiliza a data atual.\nQuando agendada para uma data/hora futura, a petição recebe status de agendamento (6) em vez de envio imediato (2).\n\nO `idprocessos` informado deve corresponder ao processo da petição. Caso contrário, será rejeitado.\n\nO `fk_certificado` é obrigatório e deve referenciar um certificado digital ativo do workspace\nautenticado pela `api_key`. O certificado precisa ter um arquivo válido associado.\n\nO `fk_peca_auxiliar` é a **sub-peça** da peça selecionada. Em tribunais/sistemas\nde catálogo enxuto, a peça funciona como categoria e a classificação real vem da\nsub-peça: consulte `GET /api/v1/complaintsandpleadings/types` e, se a peça usada\naparecer no mapa `pecas_auxiliares`, o `fk_peca_auxiliar` é **obrigatório** —\nomiti-lo retorna **422**. Quando a peça não possui sub-peças, o parâmetro **não\ndeve ser enviado**. Não confundir com o `fk_documento_auxiliar` abaixo, que é do\neProc e classifica o *documento*, não a peça.\n\nO `fk_documento_auxiliar` identifica o tipo de documento auxiliar da petição\n(consulte os tipos em `/api/v1/complaintsandpleadings/attachment/types`). **É\nobrigatório quando o sistema do tribunal é eProc** — sua ausência retorna **400**\norientando a consultar os tipos em `/api/v1/complaintsandpleadings/attachment/types`.\nNos demais sistemas é opcional; quando\ninformado, precisa ser um tipo existente e compatível com o evento/peça\nselecionado (caso contrário, retorna **400**).\n\nO `nivel_sigilo_peticao` define o nível de sigilo da petição. **É obrigatório\nquando o sistema do tribunal é eProc** — sua ausência retorna **400**\n`Missing field: nivel_sigilo_peticao`. Valores aceitos:\n- `0` — Sem Sigilo (Nível 0)\n- `1` — Segredo de Justiça (Nível I)\n- `2` — Segredo de Justiça (Nível II) — **exclusivo** do documento auxiliar\n  \"Pedido de Utilização de SISBAJUD\": enviar `2` com outro tipo de documento\n  retorna **400**; e, quando o `fk_documento_auxiliar` é o tipo \"Pedido de\n  Utilização de SISBAJUD\", o `nivel_sigilo_peticao` **deve** ser `2`\n  (caso contrário, retorna **400**).\n\nAntes de protocolar, o endpoint valida:\n- Os campos do processo exigidos pelo tribunal/sistema da petição (comarca, classe,\n  assunto, competência, área, rito, atividade econômica etc., conforme cada\n  combinação tribunal+sistema). Caso falte algum campo, retorna **422** indicando\n  o `campo` pendente e o endpoint de consulta dos valores válidos. Atualize estes\n  dados via `PUT /api/v1/complaint` antes de tentar novamente.\n- O `valorCausa` (>0) ou a flag `naoAplicaValorCausa` quando o sistema do tribunal\n  permitir (eproc e tribunais exclusivamente eproc). Caso contrário, retorna **422**.\n\nFluxo recomendado:\n1. `POST /api/v1/complaint` com os dados processuais para gerar `idpeticoes` e `idprocessos`.\n2. `PUT /api/v1/complaint` para preencher os campos do processo (comarca, classe, assunto, `valorCausa` etc.) exigidos pelo tribunal/sistema. **Obrigatório.**\n3. `POST /api/v1/complaintsandpleadings/file` anexando o PDF obrigatório.\n4. `POST /api/v1/complaintsandpleadings/attachments` para anexos complementares (opcional).\n5. `GET /api/v1/complaintsandpleadings/types` para escolher a peça (`fk_peca`) e verificar, no mapa `pecas_auxiliares`, se ela exige uma sub-peça (`fk_peca_auxiliar`).\n6. `POST /api/v1/complaint/send` para protocolar a petição inicial (informe `fk_peca_auxiliar` quando a peça exigir; quando o sistema do tribunal for eProc, informe também `fk_documento_auxiliar` e `nivel_sigilo_peticao`).\n\n### Custo\n\nEste endpoint é **cobrado por requisição** (preço padrão **R$ 1,00**) — é o endpoint mais caro\nda API. A cobrança ocorre quando o protocolo é aceito; erros de validação (`400`/`404`/`409`/\n`422`) **não consomem saldo**.\n\n⚠️ **Petição agendada também é cobrada no momento do pedido, não na data agendada.** Enviar\n`data_protocolo` com data/hora futura devolve `200` e a petição fica com status de agendamento\n(6) — a resposta é `2xx`, logo o débito acontece ali. Cancelar a petição depois **não estorna**\na cobrança do protocolo.\n\nO preço vigente para o seu workspace (que pode ser negociado) está na seção **Preços** do\n[Painel da API](/painel-api). Sem saldo suficiente a requisição **não é executada** e a\nresposta é `402`.\n\nPor ser um `POST`, **não vale a isenção de 24 horas** dos `GET` idênticos: cada solicitação\naceita é uma cobrança. Somente respostas `2xx` são cobradas.\n",
+    "parameters": [
+     {
+      "in": "query",
+      "name": "api_key",
+      "required": true,
+      "description": "Chave de API do workspace",
+      "schema": {
+       "type": "string"
+      }
+     },
+     {
+      "in": "query",
+      "name": "idpeticoes",
+      "required": true,
+      "description": "ID da petição inicial",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "idprocessos",
+      "required": true,
+      "description": "ID do processo associado à petição",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_peca",
+      "required": true,
+      "description": "ID da peça selecionada (conforme /api/v1/complaintsandpleadings/types)",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_peca_auxiliar",
+      "required": false,
+      "description": "ID da peça auxiliar (sub-peça) da peça selecionada. **Obrigatório quando a peça informada em `fk_peca` aparece no mapa `pecas_auxiliares` de /api/v1/complaintsandpleadings/types** — nesse caso, omiti-lo retorna 422. Precisa ser o `idpecas` de uma das sub-peças daquela peça. Quando a peça não possui sub-peças, NÃO envie o parâmetro (enviar retorna 422).",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_certificado",
+      "required": true,
+      "description": "ID do certificado digital ativo do workspace a ser utilizado no protocolo (consulte /api/v1/workspace/certificates)",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "data_protocolo",
+      "required": false,
+      "description": "Data/hora de protocolo nos formatos YYYY-MM-DD HH:MM:SS (data e hora) ou YYYY-MM-DD (apenas data, hora assumida como 00:00:00). Default = data atual. Quando informada uma data/hora futura, o protocolo é agendado para o momento indicado.",
+      "schema": {
+       "type": "string",
+       "example": "2026-06-10 14:30:00"
+      }
+     },
+     {
+      "in": "query",
+      "name": "fk_documento_auxiliar",
+      "required": false,
+      "description": "ID do tipo de documento auxiliar da petição (consulte /api/v1/complaintsandpleadings/attachment/types). Obrigatório quando o sistema do tribunal é eProc; opcional nos demais sistemas. Quando informado, precisa ser um tipo existente e compatível com o evento/peça selecionado.",
+      "schema": {
+       "type": "integer"
+      }
+     },
+     {
+      "in": "query",
+      "name": "nivel_sigilo_peticao",
+      "required": false,
+      "description": "Nível de sigilo da petição. Obrigatório quando o sistema do tribunal é eProc. Valores: 0 = Sem Sigilo (Nível 0); 1 = Segredo de Justiça (Nível I); 2 = Segredo de Justiça (Nível II — exclusivo e obrigatório quando o fk_documento_auxiliar é o tipo \"Pedido de Utilização de SISBAJUD\").",
+      "schema": {
+       "type": "integer",
+       "enum": [
+        0,
+        1,
+        2
+       ]
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Petição protocolada com sucesso",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "status": "success"
+        }
+       }
+      }
+     },
+     "400": {
+      "description": "Requisição inválida",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object"
+        },
+        "examples": {
+         "campo_obrigatorio": {
+          "summary": "Campo obrigatório ausente",
+          "value": {
+           "error": "Missing field: fk_peca"
+          }
+         },
+         "fk_certificado_ausente": {
+          "summary": "Campo fk_certificado ausente",
+          "value": {
+           "error": "Missing field: fk_certificado"
+          }
+         },
+         "documento_auxiliar_ausente": {
+          "summary": "fk_documento_auxiliar ausente (obrigatório para eProc)",
+          "value": {
+           "status": "error",
+           "message": "O campo fk_documento_auxiliar é obrigatório para sistemas eProc. Consulte os tipos de documento disponíveis para a petição em /api/v1/complaintsandpleadings/attachment/types e informe o fk_documento_auxiliar correspondente."
+          }
+         },
+         "nivel_sigilo_ausente": {
+          "summary": "nivel_sigilo_peticao ausente (obrigatório para eProc)",
+          "value": {
+           "error": "Missing field: nivel_sigilo_peticao"
+          }
+         },
+         "nivel_sigilo_invalido": {
+          "summary": "nivel_sigilo_peticao com valor fora de 0/1/2",
+          "value": {
+           "status": "error",
+           "message": "nivel_sigilo_peticao inválido. Valores aceitos: 0 (Sem Sigilo — Nível 0), 1 (Segredo de Justiça — Nível I) e 2 (Segredo de Justiça — Nível II, exclusivo do documento auxiliar \"Pedido de Utilização de SISBAJUD\")."
+          }
+         },
+         "nivel_sigilo_2_sem_sisbajud": {
+          "summary": "Nível 2 sem o documento auxiliar SISBAJUD",
+          "value": {
+           "status": "error",
+           "message": "O nível de sigilo 2 (Segredo de Justiça — Nível II) só é permitido quando o documento auxiliar é \"Pedido de Utilização de SISBAJUD\"."
+          }
+         },
+         "sisbajud_exige_nivel_2": {
+          "summary": "Documento auxiliar SISBAJUD exige nível 2",
+          "value": {
+           "status": "error",
+           "message": "Para o documento auxiliar \"Pedido de Utilização de SISBAJUD\" o nivel_sigilo_peticao deve ser 2 (Segredo de Justiça — Nível II)."
+          }
+         },
+         "peca_invalida": {
+          "summary": "Peça não disponível para a petição",
+          "value": {
+           "status": "error",
+           "message": "Peça informada não é válida para a petição."
+          }
+         },
+         "data_invalida": {
+          "summary": "Data de protocolo inválida",
+          "value": {
+           "status": "error",
+           "message": "Data de protocolo inválida. Use o formato YYYY-MM-DD ou YYYY-MM-DD HH:MM:SS."
+          }
+         },
+         "nao_inicial": {
+          "summary": "Petição não é do tipo inicial",
+          "value": {
+           "status": "error",
+           "message": "A petição informada não é do tipo inicial."
+          }
+         },
+         "processo_divergente": {
+          "summary": "Processo informado não corresponde à petição",
+          "value": {
+           "status": "error",
+           "message": "O processo informado não corresponde à petição."
+          }
+         },
+         "arquivo_ausente": {
+          "summary": "Arquivo da petição não anexado",
+          "value": {
+           "status": "error",
+           "message": "Arquivo da petição não adicionado."
+          }
+         },
+         "certificado_expirado": {
+          "summary": "Data de protocolo posterior ao vencimento do certificado",
+          "value": {
+           "status": "error",
+           "message": "A data de protocolo (15/04/2026) é igual ou posterior à data de validade do certificado (10/04/2026). Selecione uma data anterior ou utilize outro certificado."
+          }
+         }
+        }
+       }
+      }
+     },
+     "401": {
+      "description": "Chave de API não informada",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "API key not provided"
+        }
+       }
+      }
+     },
+     "404": {
+      "description": "Chave de API, petição ou certificado não encontrado",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "api_key_nao_encontrada": {
+          "summary": "Chave de API não encontrada",
+          "value": {
+           "error": "API key not found"
+          }
+         },
+         "peticao_nao_encontrada": {
+          "summary": "Petição não encontrada",
+          "value": {
+           "status": "error",
+           "message": "Petição não encontrada."
+          }
+         },
+         "certificado_nao_encontrado": {
+          "summary": "Certificado não pertence ao workspace ou está inativo",
+          "value": {
+           "status": "error",
+           "message": "Certificado não encontrado ou inativo para este workspace"
+          }
+         },
+         "certificado_invalido": {
+          "summary": "Certificado sem arquivo associado",
+          "value": {
+           "status": "error",
+           "message": "Certificado inválido"
+          }
+         }
+        }
+       }
+      }
+     },
+     "405": {
+      "description": "Método não permitido",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "error": "Method not allowed"
+        }
+       }
+      }
+     },
+     "409": {
+      "description": "Status da petição não permite o envio",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "status": "error",
+         "message": "Status da petição não permite o envio."
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Parâmetro com formato inválido (idpeticoes/idprocessos/fk_peca),\npeça auxiliar ausente/indevida, ou dados do processo incompletos. A\npetição não tem todos os campos exigidos pelo tribunal/sistema (ou\nestá sem `valorCausa`). Atualize a petição via\n`PUT /api/v1/complaint` antes de tentar novamente.\n",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          },
+          "campo": {
+           "type": "string",
+           "description": "Nome do campo pendente que precisa ser preenchido via PUT."
+          },
+          "error": {
+           "type": "string"
+          }
+         }
+        },
+        "examples": {
+         "parametro_invalido": {
+          "summary": "idpeticoes/idprocessos/fk_peca não é inteiro positivo",
+          "value": {
+           "error": "idpeticoes deve ser inteiro > 0."
+          }
+         },
+         "campo_processo_pendente": {
+          "summary": "Campo do processo exigido pelo tribunal/sistema não preenchido",
+          "value": {
+           "status": "error",
+           "message": "Para prosseguir com o preenchimento da petição é necessário preencher o campo comarca. Consulte o endpoint /api/v1/complaint/district. Atualize a petição via PUT /api/v1/complaint informando os campos obrigatórios antes de protocolar.",
+           "campo": "comarca"
+          }
+         },
+         "valor_causa_obrigatorio": {
+          "summary": "valorCausa não informado",
+          "value": {
+           "status": "error",
+           "message": "O campo valorCausa é obrigatório para o protocolo da petição inicial. Atualize a petição via PUT /api/v1/complaint informando valorCausa (ou naoAplicaValorCausa quando o sistema do tribunal permitir) antes de protocolar.",
+           "campo": "valorCausa"
+          }
+         },
+         "peca_auxiliar_ausente": {
+          "summary": "A peça escolhida exige uma sub-peça e fk_peca_auxiliar não foi informado",
+          "value": {
+           "status": "error",
+           "message": "A peça selecionada exige a escolha de uma peça auxiliar. Consulte pecas_auxiliares em /api/v1/complaintsandpleadings/types e informe o fk_peca_auxiliar correspondente.",
+           "campo": "fk_peca_auxiliar"
+          }
+         },
+         "peca_auxiliar_de_outra_peca": {
+          "summary": "fk_peca_auxiliar não é sub-peça da peça informada em fk_peca",
+          "value": {
+           "status": "error",
+           "message": "Peça auxiliar informada não pertence à peça selecionada. Consulte pecas_auxiliares em /api/v1/complaintsandpleadings/types.",
+           "campo": "fk_peca_auxiliar"
+          }
+         },
+         "peca_sem_auxiliares": {
+          "summary": "fk_peca_auxiliar enviado para uma peça que não tem sub-peças",
+          "value": {
+           "status": "error",
+           "message": "A peça selecionada não possui peças auxiliares. Remova o fk_peca_auxiliar ou consulte pecas_auxiliares em /api/v1/complaintsandpleadings/types.",
+           "campo": "fk_peca_auxiliar"
+          }
+         }
+        }
+       }
+      }
+     },
+     "500": {
+      "description": "Falha ao protocolar a petição",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "object",
+         "properties": {
+          "status": {
+           "type": "string"
+          },
+          "message": {
+           "type": "string"
+          }
+         }
+        },
+        "example": {
+         "status": "error",
+         "message": "Erro ao enviar petição inicial."
+        }
+       }
+      }
      }
     }
    }
