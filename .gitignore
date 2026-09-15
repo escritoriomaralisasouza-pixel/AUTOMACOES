@@ -7,3 +7,11 @@ legalmail/.api_key
 # (sigilo profissional). Ficam no Drive do escritorio, nunca no git.
 legalmail/preview-*.html
 legalmail/relatorio-*.html
+
+# Trilha de auditoria dos protocolos: registra numero de processo e de peticao
+# (sigilo profissional). Fica so na maquina que protocolou.
+legalmail/auditoria-protocolos.log
+
+# Cache do Python
+__pycache__/
+*.pyc
