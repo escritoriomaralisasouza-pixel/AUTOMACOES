@@ -99,12 +99,55 @@ Rotacione a chave periodicamente.
 
 ---
 
-## 📅 Rotina de fechamento de semana
+## 📅 Rotinas agendadas
 
-Roda **toda sexta-feira às 17h30** (Brasília), sozinha, em sessão nova.
-Configurável em `claude.ai/code/routines`.
+### ⚠️ A rotina NÃO enxerga o servidor MCP — leia antes de mexer
 
-1. Apura a semana na Legal Mail — intimações, protocolos, audiências, prazos
+**Sessão de rotina nasce sem o repositório clonado.** Sem repositório não há
+`.mcp.json`, e sem ele não existem as ferramentas `mcp__legalmail__*`. Isso é
+do desenho da plataforma, não é falha.
+
+Entre 10/09 e 29/09/2026 as três rotinas de fechamento caíram na fonte
+alternativa (push por e-mail) e entregaram metade dos números:
+
+| Indicador, semana 19–25/09 | Relatório | Real |
+|---|---|---|
+| Intimações | 35 | **73** |
+| Protocolos | N/D | **23** |
+| Processos na base | N/D | **300** |
+| Passivo de prazos | N/D | **1011** |
+| Atos do TRT-3 | 0 | **18** |
+
+O push por e-mail não cobre o TRT-3. Três ações trabalhistas novas sumiram.
+
+**A correção:** as rotinas chamam a API direto, por `python3`, com o apurador
+embutido no próprio prompt. Referência versionada em `legalmail/apurador.py`
+(modos `semana` e `radar`). Dois detalhes que quebram a rodada:
+
+- **O proxy do container exige o cabeçalho `User-Agent`.** Sem ele, HTTP 403.
+  Não é bloqueio de rede: o container alcança `api.legalmail.com.br`. A skill
+  `esteira-legalmail` documenta esse caminho como fechado — **está errada**.
+- **A API quase nunca preenche `data_limite_manifestacao`** (2 em 200 medidos
+  em 29/09/2026). Ordenar prazo por esse campo não funciona.
+
+**Regra:** se a apuração devolver erro, a rotina **para** e avisa. Nunca cai
+para o Gmail. Relatório incompleto apresentado como completo é pior que
+relatório nenhum.
+
+### Segunda, 8h — Radar de Prazos
+
+`trig_01JutAaFzR1qJPSFbNuNUPE2` · cron `0 11 * * 1` (UTC)
+
+Fila de execução da semana, uma linha por processo, ordenada por gravidade do
+teor e idade da intimação. Farol VERMELHO / LARANJA / AMARELO / VERDE. Vai a
+**escritoriomaralisasouza@gmail.com** e **controladoriamaralisasouza@gmail.com**,
+com a fila inteira, cada processo nominal.
+
+### Sexta, 17h30 — Fechamento de Semana
+
+`trig_01Nq7PV8uduEZHGDgoxfHMfy` · cron `30 20 * * 5` (UTC)
+
+1. Apura a semana pela API — intimações, protocolos, audiências, passivo
 2. Publica o relatório como página privada (Artifact)
 3. Grava cópia em **Meu Drive › CONTROLADORIA › RELATORIOS FECHAMENTO SEMANA**
    `parentId = 1NkYQEpoYtgltjOF5qX72pRvJ05tbJG38`
@@ -115,6 +158,14 @@ O documento é gravado em `contentMimeType: "text/html"` para sair formatado.
 
 **Trava de ordem:** o e-mail só sai depois que a cópia do Drive estiver salva.
 Se a gravação falhar, o envio é cancelado e o erro é reportado.
+
+### Conectores: só se propagam na criação
+
+Uma rotina criada por ferramenta MCP **não herda** os conectores da sessão que
+a criou — ela nasce sem Gmail e sem Drive, e então não envia e-mail nem grava
+no Drive. Conectores se adicionam na interface, em `claude.ai/code/routines`.
+Ao criar rotina nova que precise enviar algo, **confira isso antes de confiar
+que ela roda**.
 
 ---
 
@@ -187,10 +238,15 @@ TRF-6, TRF-1, TRF-3, TRF-2/JFES, TJSC, TRT-11, TRT-15.
 
 ## 📌 Pendências abertas
 
-- [ ] Gravar `LEGALMAIL_API_KEY` nas *Environment variables* do ambiente em
-      `claude.ai/code` — sem isso, sessões novas dependem do `.api_key` local,
-      que não sobrevive ao contêiner
+- [x] ~~Gravar `LEGALMAIL_API_KEY` nas *Environment variables*~~ — feito, confirmado 29/09/2026
 - [ ] Rotacionar a chave da Legal Mail e apagar o `INSTALAR-LEGALMAIL.py` do
       Drive, que a carrega em texto puro
-- [ ] Atacar o passivo de **849 intimações com prazo pendente** contra 265
-      processos cadastrados
+- [ ] Atacar o passivo de **1.011 intimações com prazo pendente** contra 300
+      processos cadastrados — o radar de segunda entrega a fila em ordem
+- [ ] Adicionar os conectores Gmail e Google-Drive à rotina **Radar de Prazos**
+      (`trig_01JutAaFzR1qJPSFbNuNUPE2`) em `claude.ai/code/routines` — criada
+      por ferramenta, nasceu sem eles e **não envia e-mail** enquanto isso não
+      for feito
+- [ ] Corrigir a skill `esteira-legalmail`: ela diz que `curl`/`bash` do
+      container em nuvem está bloqueado (403). Está errado — o 403 era falta do
+      cabeçalho `User-Agent`. Verificado em 29/09/2026
